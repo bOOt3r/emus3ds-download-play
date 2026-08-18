@@ -1,6 +1,18 @@
 # VirtuaNES for 3DS — Local Multiplayer Fork
 
-> **Work in progress.** This fork adds native local multiplayer to the VirtuaNES core in `bubble2k16/emus3ds`. The goal is to let two 3DS/2DS systems play the same two-player NES game together over local wireless while each console runs the NES emulator locally.
+**Work in progress.** This fork adds native local multiplayer to the VirtuaNES core in `bubble2k16/emus3ds`. The goal is to let two 3DS/2DS systems play the same two-player NES game together over local wireless while each console runs the NES emulator locally. 
+
+**But why?** For the first time in years i was recommended a video from AVGN, actually it was this video: [AVGN: Bubble Bobble](https://www.youtube.com/watch?v=1mVmTa3KefQ).
+
+And i relaised that.. I ALSO WANT TO PLAY BUBBLE BOBBLE WITH A FRIEND!
+
+And as a sign, clear as day i got this headline in my feed a few days later: [The first Zelda adventure has gone co-op 40 years after its release
+](https://www.gamereactor.eu/the-first-zelda-adventure-has-gone-co-op-40-years-after-its-release-1759993/).
+
+Unfortunatly i don't own a NES, but i do own a (moderate) BUNCH of old 2DS and 3DS systems and on one of them i had VirtuaNES installed so.. Here we are!
+
+Full transprancy, i would not have a chance in hell to make this happen without the help of an LLM, just so you know!
+With that said, feel free to improve and point out mistakes!
 
 ## Local Play — current status
 
