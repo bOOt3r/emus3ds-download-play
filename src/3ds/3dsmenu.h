@@ -126,6 +126,8 @@ SMenuItem* menu3dsGetMenuItemByID(int tabIndex, int ID);
 //       the menu away.
 //-------------------------------------------------------
 int menu3dsShowMenu(bool (*itemChangedCallback)(int ID, int value), bool animateMenu);
+void menu3dsSetFrameCallback(bool (*callback)());
+void menu3dsRequestExit();
 
 
 //-------------------------------------------------------

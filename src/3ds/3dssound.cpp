@@ -80,6 +80,8 @@ u64 snd3dsGetSamplePosition() {
 int blockCount = 0;
 
 
+static void snd3dsDebugStage(const char *msg);
+
 //---------------------------------------------------------
 // Mix the samples.
 //
@@ -89,6 +91,12 @@ int blockCount = 0;
 //---------------------------------------------------------
 void snd3dsMixSamples()
 {
+    static bool debugFirstMix = true;
+    bool debugThisMix = debugFirstMix;
+    debugFirstMix = false;
+
+    if (debugThisMix)
+        snd3dsDebugStage("VN-MIX 0 enter");
     #define MIN_FORWARD_BLOCKS          8
     #define MAX_FORWARD_BLOCKS          16
 
@@ -96,7 +104,14 @@ void snd3dsMixSamples()
     bool generateSound = false;
     if (snd3DS.isPlaying)
     {
+        if (debugThisMix)
+            snd3dsDebugStage("VN-MIX 1 before generate");
+
         impl3dsGenerateSoundSamples(snd3dsSamplesPerLoop);
+
+        if (debugThisMix)
+            snd3dsDebugStage("VN-MIX 2 after generate");
+
         generateSound = true;
     }
     t3dsEndTiming(44);
@@ -149,7 +164,35 @@ void snd3dsMixSamples()
     {
         if (generateSound)
         {
+            if (debugThisMix)
+                snd3dsDebugStage("VN-MIX 3 before output");
+
             impl3dsOutputSoundSamples(snd3dsSamplesPerLoop, &snd3DS.leftBuffer[p], &snd3DS.rightBuffer[p]);
+
+            static int debugPcmChecks = 0;
+            static bool debugPcmFound = false;
+
+            if (!debugPcmFound && debugPcmChecks < 64)
+            {
+                for (int i = 0; i < snd3dsSamplesPerLoop; i++)
+                {
+                    if (snd3DS.leftBuffer[p + i] != 0 ||
+                        snd3DS.rightBuffer[p + i] != 0)
+                    {
+                        snd3dsDebugStage("VN-PCM nonzero samples found");
+                        debugPcmFound = true;
+                        break;
+                    }
+                }
+
+                debugPcmChecks++;
+
+                if (!debugPcmFound && debugPcmChecks == 64)
+                    snd3dsDebugStage("VN-PCM still all zero after 64 blocks");
+            }
+
+            if (debugThisMix)
+                snd3dsDebugStage("VN-MIX 4 after output");
         }
         else
         {
@@ -176,6 +219,9 @@ void snd3dsMixSamples()
     //
     if (blockCount % MIN_FORWARD_BLOCKS == 0 && snd3DS.isPlaying)
         CSND_FlushDataCache(snd3DS.fullBuffers, SAMPLEBUFFER_SIZE * 2 * 2);
+
+    if (debugThisMix)
+        snd3dsDebugStage("VN-MIX 5 done");
     t3dsEndTiming(43);
 }
 
@@ -186,6 +232,7 @@ void snd3dsMixSamples()
 //---------------------------------------------------------
 void snd3dsMixingThread(void *p)
 {
+    snd3dsDebugStage("VN-THREAD 0 started");
     snd3DS.upToSamplePosition = snd3dsGetSamplePosition();
     snd3DS.startSamplePosition = snd3DS.upToSamplePosition;
     //svcExitThread();
@@ -197,7 +244,16 @@ void snd3dsMixingThread(void *p)
             svcSleepThread(100000 * 1);
 
         if (snd3DS.isPlaying)
+        {
+            static bool debugSawPlaying = false;
+            if (!debugSawPlaying)
+            {
+                snd3dsDebugStage("VN-THREAD 1 saw playing");
+                debugSawPlaying = true;
+            }
+
             snd3dsMixSamples();
+        }
     }
     snd3DS.terminateMixingThread = -1;
     svcExitThread();
@@ -250,14 +306,21 @@ Result snd3dsPlaySound(int chn, u32 flags, u32 sampleRate, float vol, float pan,
 		CSND_SetBlock(chn, 1, paddr1, size);
 	}
     CSND_SetPlayState(chn, 1);
+    return 0;
 }
 
 
 //---------------------------------------------------------
 // Start playing the samples.
 //---------------------------------------------------------
+static void snd3dsDebugStage(const char *msg)
+{
+    svcOutputDebugString(msg, strlen(msg));
+}
+
 void snd3dsStartPlaying()
 {
+    snd3dsDebugStage("VN-SND 0 enter");
     if (!snd3DS.isPlaying)
     {
         for (int i = 0; i < SAMPLEBUFFER_SIZE; i++)
@@ -265,7 +328,9 @@ void snd3dsStartPlaying()
             snd3DS.leftBuffer[i] = 0;
             snd3DS.rightBuffer[i] = 0;
         }
+        snd3dsDebugStage("VN-SND 1 buffers cleared");
         CSND_FlushDataCache(snd3DS.fullBuffers, SAMPLEBUFFER_SIZE * 2 * 2);
+        snd3dsDebugStage("VN-SND 2 cache flushed");
         
         // CSND
         // Fix: Copied libctru's csndPlaySound and modified it so that it will
@@ -274,21 +339,31 @@ void snd3dsStartPlaying()
         //
         if (snd3dsIsStereo)
         {
+            snd3dsDebugStage("VN-SND 3 before left");
             snd3dsPlaySound(LEFT_CHANNEL, SOUND_REPEAT | SOUND_FORMAT_16BIT, snd3dsSampleRate, 1.0f, -1.0f, (u32*)snd3DS.leftBuffer, (u32*)snd3DS.leftBuffer, snd3dsSampleRate * 2);
+            snd3dsDebugStage("VN-SND 4 after left");
+            snd3dsDebugStage("VN-SND 5 before right");
             snd3dsPlaySound(RIGHT_CHANNEL, SOUND_REPEAT | SOUND_FORMAT_16BIT, snd3dsSampleRate, 1.0f, 1.0f, (u32*)snd3DS.rightBuffer, (u32*)snd3DS.rightBuffer, snd3dsSampleRate * 2);
+            snd3dsDebugStage("VN-SND 6 after right");
         }
         else
         {
+            snd3dsDebugStage("VN-SND M3 before mono");
             snd3dsPlaySound(LEFT_CHANNEL, SOUND_REPEAT | SOUND_FORMAT_16BIT, snd3dsSampleRate, 1.0f, 0, (u32*)snd3DS.leftBuffer, (u32*)snd3DS.leftBuffer, snd3dsSampleRate * 2);
+            snd3dsDebugStage("VN-SND M4 after mono");
         }
 
         // Flush CSND command buffers
+        snd3dsDebugStage("VN-SND 7 before exec");
         csndExecCmds(true);
+        snd3dsDebugStage("VN-SND 8 after exec");
         snd3DS.startTick = svcGetSystemTick();
+        snd3dsDebugStage("VN-SND 9 tick set");
 
         // Fix for race condition for 64-bit access in the sound thread.
         snd3DS.upToSamplePosition = snd3dsGetSamplePosition();  
         snd3DS.isPlaying = true;
+        snd3dsDebugStage("VN-SND 11 done");
     }
 }
 

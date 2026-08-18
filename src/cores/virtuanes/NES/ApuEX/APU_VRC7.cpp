@@ -9,7 +9,7 @@
 
 APU_VRC7::APU_VRC7()
 {
-    u8 new3DS = false;
+    bool new3DS = false;
     APT_CheckNew3DS(&new3DS);
 	int sampleRate = 32000;
 	if (!new3DS)

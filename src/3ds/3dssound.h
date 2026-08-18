@@ -1,3 +1,4 @@
+#include <atomic>
 #include "3ds.h"
 
 #ifndef _3DSSOUND_H_
@@ -7,7 +8,7 @@
 
 typedef struct 
 {
-    bool        isPlaying = false;
+    std::atomic<bool> isPlaying{false};
     
     int         audioType = 0;              // 0 - no audio, 1 - CSND, 2 - DSP
     short       *fullBuffers;

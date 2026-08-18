@@ -986,7 +986,7 @@ void impl3dsEmulationRunOneFrame(bool firstFrame, bool skipDrawingFrame)
         // Let's try to keep the digital sample queue filled with some data
         emulator.waitBehavior = WAIT_FULL;
         if (dacQueueGetLength(&dacQueue) <= soundSamplesPerGeneration * 2)
-            emulator.waitBehavior = WAIT_NONE;
+            emulator.waitBehavior = EMU_WAIT_NONE;
 
 		impl3dsEmulationPollInput();
 

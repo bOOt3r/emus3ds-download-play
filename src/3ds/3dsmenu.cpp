@@ -585,6 +585,19 @@ SMenuTab *menu3dsAnimateTab(int direction)
 static u32 lastKeysHeld = 0xffffff;
 static u32 thisKeysHeld = 0;
 
+static bool (*menuFrameCallback)() = NULL;
+static bool menuExitRequested = false;
+
+void menu3dsSetFrameCallback(bool (*callback)())
+{
+    menuFrameCallback = callback;
+}
+
+void menu3dsRequestExit()
+{
+    menuExitRequested = true;
+}
+
 //-------------------------------------------------------
 // Displays the menu and allows the user to select from
 // a list of choices.
@@ -593,6 +606,8 @@ int menu3dsMenuSelectItem(bool (*itemChangedCallback)(int ID, int value))
 {
     int framesDKeyHeld = 0;
     int returnResult = -1;
+
+    menuExitRequested = false;
 
     char menuTextBuffer[512];
 
@@ -620,6 +635,20 @@ int menu3dsMenuSelectItem(bool (*itemChangedCallback)(int ID, int value))
         }
 
         gpu3dsCheckSlider();
+
+        if (menuFrameCallback && menuFrameCallback())
+        {
+            menu3dsDrawEverything();
+            menu3dsSwapBuffersAndWaitForVBlank();
+        }
+
+        if (menuExitRequested)
+        {
+            menuExitRequested = false;
+            returnResult = -2;
+            break;
+        }
+
         hidScanInput();
         thisKeysHeld = hidKeysHeld();
 

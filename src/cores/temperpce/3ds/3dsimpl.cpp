@@ -1035,7 +1035,7 @@ printf ("%d\n", emulatorFrame);
                 if (cd_write_index_diff < 0)
                     cd_write_index_diff += CD_AUDIO_BUFFER_SIZE;
                 if (cd_write_index_diff < SYNC_SAMPLES)
-                    emulator.waitBehavior = WAIT_NONE;
+                    emulator.waitBehavior = EMU_WAIT_NONE;
             }
 
             if (adpcm.has_samples)
@@ -1047,11 +1047,11 @@ printf ("%d\n", emulatorFrame);
                 if (adpcm_write_index_diff < 0)
                     adpcm_write_index_diff += ADPCM_AUDIO_BUFFER_SIZE;
                 if (adpcm_write_index_diff < SYNC_SAMPLES)
-                    emulator.waitBehavior = WAIT_NONE;
+                    emulator.waitBehavior = EMU_WAIT_NONE;
             }
 
-            //if (emulator.waitBehavior == WAIT_NONE)
-            //    printf ("WAIT_NONE\n");
+            //if (emulator.waitBehavior == EMU_WAIT_NONE)
+            //    printf ("EMU_WAIT_NONE\n");
             cd.has_samples = false;
             adpcm.has_samples = false;
         }

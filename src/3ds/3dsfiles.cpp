@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <vector>
+#include <string>
 
 #include <unistd.h>
 #include <string.h>
@@ -117,6 +118,14 @@ void _makepath (char *path, const char *, const char *dir, const char *fname, co
 void file3dsInitialize(void)
 {
     getcwd(currentDir, _MAX_PATH);
+
+    size_t len = strlen(currentDir);
+
+    if (len > 0 && currentDir[len - 1] != '/' && len < _MAX_PATH - 1)
+    {
+        currentDir[len] = '/';
+        currentDir[len + 1] = '\0';
+    }
 }
 
 

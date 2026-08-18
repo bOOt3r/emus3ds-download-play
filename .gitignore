@@ -1,5 +1,12 @@
-build/*
-releases/*
+build/
+**/build/
+releases/
 *.3dsx
 *.cia
 *.elf
+*.o
+*.d
+*.map
+*.lst
+.DS_Store
+Thumbs.db

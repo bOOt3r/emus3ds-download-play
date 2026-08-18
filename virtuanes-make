@@ -34,6 +34,8 @@ ASSETS		:=	src/cores/virtuanes/assets
 ICON		:=	$(ASSETS)/icon.png
 TARGET		:=	virtuanes_3ds
 BUILD		:=	build
+RELEASE_NAME	:=	virtuanes_3ds_download_play
+RELEASE_DIR	:=	releases/$(RELEASE_NAME)
 SOURCES		:=	src
 DATA		:=	data
 INCLUDES	:=	include \
@@ -58,7 +60,7 @@ CFLAGS	:=	-g -w -O3 -mword-relocations -finline-limit=20000 \
 			-fno-rtti -fomit-frame-pointer -ffunction-sections -fpermissive \
 			$(ARCH)
 
-CFLAGS	+=	$(INCLUDE) -DARM11 -D_3DS -D__GNUC__ -DHAVE_ASPRINTF -DUSE_FILE32API -DLIBCTRU_1_0_0
+CFLAGS += $(INCLUDE) -DARM11 -D_3DS -DHAVE_ASPRINTF -DUSE_FILE32API
 
 CXXFLAGS	:= $(CFLAGS)  -fno-exceptions -std=gnu++11
 
@@ -93,6 +95,7 @@ export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 #CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
 
 CFILES		:=	$(foreach file,$(notdir $(wildcard src/3ds/zlib/*.c)),			3ds/zlib/$(file))
+CFILES 		+= 	3ds/gpu-old.c
 
 CPPFILES	:=	$(foreach file,$(notdir $(wildcard src/3ds/*.cpp)),					3ds/$(file)) \
 			$(foreach file,$(notdir $(wildcard src/cores/virtuanes/*.cpp)),				cores/virtuanes/$(file)) \
@@ -186,7 +189,7 @@ endif
 #---------------------------------------------------------------------------------
 
 
-.PHONY: $(BUILD) clean all
+.PHONY: $(BUILD) clean all release release-3dsx
 
 #---------------------------------------------------------------------------------
 all: $(BUILD) cia
@@ -210,6 +213,18 @@ ifneq ($(MAKEROM),)
 else
 	$(error "CIA creation is not supported on this platform ($(UNAME_S)_$(UNAME_M))")
 endif
+
+release: release-3dsx
+
+release-3dsx: $(BUILD)
+	@mkdir -p $(RELEASE_DIR)/3ds/$(TARGET)
+	@cp -f $(OUTPUT).3dsx $(RELEASE_DIR)/3ds/$(TARGET)/
+	@cp -f $(OUTPUT).smdh $(RELEASE_DIR)/3ds/$(TARGET)/
+	@cp -f $(TARGET)_top.png $(RELEASE_DIR)/3ds/$(TARGET)/
+	@cp -f readme-virtuanes-download-play.md $(RELEASE_DIR)/README.md
+	@rm -f releases/$(RELEASE_NAME).zip
+	@cd releases && zip -rq $(RELEASE_NAME).zip $(RELEASE_NAME)
+	@echo built ... releases/$(RELEASE_NAME).zip
 
 
 #---------------------------------------------------------------------------------

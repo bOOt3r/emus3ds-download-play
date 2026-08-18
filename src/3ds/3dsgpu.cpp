@@ -1,4 +1,7 @@
 #include <3ds.h>
+extern "C" {
+#include "gpu-old.h"
+}
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -24,9 +27,6 @@
 bool somethingWasDrawn = false;
 bool somethingWasFlushed = false;
 
-extern u8* gfxTopRightFramebuffers[2];
-extern u8* gfxTopLeftFramebuffers[2];
-u8* gfxOldTopRightFramebuffers[2];
 
 extern "C" void gfxSetFramebufferInfo(gfxScreen_t screen, u8 id);
 extern "C" void gfxWriteFramebufferInfo(gfxScreen_t screen);
@@ -36,7 +36,7 @@ bool isNew3DS = false;
 /*
 For reference only:
 
-GSPGPU_FramebufferFormats {
+GSPGPU_FramebufferFormat {
   GSP_RGBA8_OES =0,
   GSP_BGR8_OES =1,
   GSP_RGB565_OES =2,
@@ -163,33 +163,8 @@ void gpu3dsCheckSlider()
     float sliderVal = *(float*)0x1FF81080;
 
     if (sliderVal != prevSliderVal)
-    {
-        gfxTopRightFramebuffers[0] = gfxTopLeftFramebuffers[0];
-        gfxTopRightFramebuffers[1] = gfxTopLeftFramebuffers[1];
-        
-        if (sliderVal == 0)
-        {
-            gpu3dsSetParallaxBarrier(false);
-        }
-        else if (sliderVal < 0.3)
-        {
-            if (!isNew3DS)
-            {
-                gfxTopRightFramebuffers[0] = gfxOldTopRightFramebuffers[0];
-                gfxTopRightFramebuffers[1] = gfxOldTopRightFramebuffers[1];
-            }
-            gpu3dsSetParallaxBarrier(false);
-        }
-        else if (sliderVal < 0.6)
-            gpu3dsSetParallaxBarrier(false);
-        else
-            gpu3dsSetParallaxBarrier(true);
+        gpu3dsSetParallaxBarrier(false);
 
-        u8* fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
-        int b = fb == gfxTopLeftFramebuffers[0] ? 0 : 1;
-        gfxSetFramebufferInfo(GFX_TOP, b);
-        gfxWriteFramebufferInfo(GFX_TOP);
-    }
     prevSliderVal = sliderVal;
 }
 
@@ -1048,7 +1023,7 @@ const uint32 GX_TRANSFER_FRAMEBUFFER_FORMAT_VALUES[5] = {
     GX_TRANSFER_FMT_RGBA8, GX_TRANSFER_FMT_RGB8, GX_TRANSFER_FMT_RGB5A1, GX_TRANSFER_FMT_RGB565, GX_TRANSFER_FMT_RGBA4 };
 
 /*
-Translate from the following GSPGPU_FramebufferFormats to their respective GX_TRANSFER_FMT values:
+Translate from the following GSPGPU_FramebufferFormat to their respective GX_TRANSFER_FMT values:
   GSP_RGBA8_OES =0,
   GSP_BGR8_OES =1,
   GSP_RGB565_OES =2,
@@ -1145,22 +1120,12 @@ bool gpu3dsInitialize()
     gfxInit	(GPU3DS.screenFormat, GPU3DS.screenFormat, false);
 	GPU_Init(NULL);
 
-	gfxSet3D(true);
+	gfxSet3D(false);
 
-    u8 val = 0;
+    bool val = false;
     APT_CheckNew3DS(&val);
     isNew3DS = (val != 0);
 
-    gfxOldTopRightFramebuffers[0] = gfxTopRightFramebuffers[0];
-    gfxOldTopRightFramebuffers[1] = gfxTopRightFramebuffers[1];
-    for (int i = 0; i < 400 * 240 * 4; i++)
-    {
-        gfxOldTopRightFramebuffers[0][i] = 0;
-        gfxOldTopRightFramebuffers[1][i] = 0;
-    }
-
-    gfxTopRightFramebuffers[0] = gfxTopLeftFramebuffers[0];
-    gfxTopRightFramebuffers[1] = gfxTopLeftFramebuffers[1];
 
     // Create the frame and depth buffers for the top screen.
     //
@@ -1299,7 +1264,5 @@ void gpu3dsFinalize()
     // Restore the old frame buffers so that gfxExit can properly
     // free them.
     //
-    gfxTopRightFramebuffers[0] = gfxOldTopRightFramebuffers[0];
-    gfxTopRightFramebuffers[1] = gfxOldTopRightFramebuffers[1];
 	gfxExit();
 }

@@ -18,7 +18,7 @@ extern char romFileNameLastSelected[];
 //---------------------------------------------------------
 #define WAIT_FULL 0
 #define WAIT_HALF 1
-#define WAIT_NONE 2
+#define EMU_WAIT_NONE 2
 
 
 

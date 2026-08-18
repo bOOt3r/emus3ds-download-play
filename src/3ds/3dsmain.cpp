@@ -41,11 +41,6 @@ char *romFileName = 0;
 char romFileNameFullPath[_MAX_PATH];
 char romFileNameLastSelected[_MAX_PATH];
 
-
-
-//-------------------------------------------------------
-// Clear top screen with logo.
-//-------------------------------------------------------
 void clearTopScreenWithLogo()
 {
 	unsigned char* image;
@@ -55,7 +50,6 @@ void clearTopScreenWithLogo()
 
     if (!error && width == 400 && height == 240)
     {
-        // lodepng outputs big endian rgba so we need to convert
         for (int i = 0; i < 2; i++)
         {
             u8* src = image;
@@ -77,25 +71,482 @@ void clearTopScreenWithLogo()
         free(image);
     }
 }
-
-
-//----------------------------------------------------------------------
-// Start up menu.
-//----------------------------------------------------------------------
 SMenuItem emulatorNewMenu[] = {
     MENU_MAKE_ACTION(6001, "  Exit"),
     MENU_MAKE_LASTITEM  ()
     };
 
+enum LocalPlayMode
+{
+    LOCALPLAY_SINGLE = 0,
+    LOCALPLAY_HOST,
+    LOCALPLAY_JOIN
+};
+
+static LocalPlayMode localPlayMode = LOCALPLAY_SINGLE;
+static bool hostLobbyActive = false;
+static bool joinLobbyActive = false;
+static bool joinDiscoveryActive = false;
+
+static bool hostStartRequested = false;
+static bool hostCorePrepared = false;
+static bool joinCorePrepared = false;
+static bool localPlayLaunchPending = false;
+static bool joinLobbyHostConnected = false;
+
+SMenuItem localPlayMenu[] = {
+    MENU_MAKE_ACTION(6101, "[X] Single"),
+    MENU_MAKE_ACTION(6102, "[ ] Host"),
+    MENU_MAKE_ACTION(6103, "[ ] Join"),
+    MENU_MAKE_LASTITEM()
+};
+
+static char hostLobbyGameText[_MAX_PATH] = "Game: ";
+static char hostLobbyPlayer2Text[128] =
+    "Player 2: Waiting...";
+
+SMenuItem hostLobbyMenu[] = {
+    MENU_MAKE_HEADER1("Local Play - Host"),
+    MENU_MAKE_DISABLED(hostLobbyGameText),
+    MENU_MAKE_DISABLED("Player 1: Ready"),
+    MENU_MAKE_DISABLED(hostLobbyPlayer2Text),
+    MENU_MAKE_DISABLED("  Start Game"),
+    MENU_MAKE_LASTITEM()
+};
+
+static char joinLobbyHostText[64] = "Joined: Host";
+static char joinLobbyGameText[128] = "Game: Unknown";
+static char joinLobbyStatusText[96] = "Waiting for ROM info...";
+
+SMenuItem joinLobbyMenu[] = {
+    MENU_MAKE_HEADER1("Local Play - Join"),
+    MENU_MAKE_DISABLED(joinLobbyHostText),
+    MENU_MAKE_DISABLED(joinLobbyGameText),
+    MENU_MAKE_DISABLED(joinLobbyStatusText),
+    MENU_MAKE_LASTITEM()
+};
+
+#define LOCALPLAY_MAX_LOBBIES 8
+
+static char nearbyHostNames[LOCALPLAY_MAX_LOBBIES][32];
+static char nearbyGameNames[LOCALPLAY_MAX_LOBBIES][96];
+static char nearbyGameRows[LOCALPLAY_MAX_LOBBIES][140];
+
+static SMenuItem nearbyGamesMenu[LOCALPLAY_MAX_LOBBIES + 2];
+static int nearbyGameCount = 0;
+
+
+static void buildNearbyGamesMenu()
+{
+    memset(nearbyGamesMenu, 0, sizeof(nearbyGamesMenu));
+
+    nearbyGamesMenu[0].Type = MENUITEM_HEADER1;
+    nearbyGamesMenu[0].ID = -1;
+    nearbyGamesMenu[0].Text = (char *)"Nearby Games";
+
+    for (int i = 0; i < nearbyGameCount; i++)
+    {
+        snprintf(
+            nearbyGameRows[i],
+            sizeof(nearbyGameRows[i]),
+            "%-10s  %s",
+            nearbyHostNames[i],
+            nearbyGameNames[i]
+        );
+
+        nearbyGamesMenu[i + 1].Type = MENUITEM_ACTION;
+        nearbyGamesMenu[i + 1].ID = 6300 + i;
+        nearbyGamesMenu[i + 1].Text = nearbyGameRows[i];
+        nearbyGamesMenu[i + 1].Description = NULL;
+    }
+
+    nearbyGamesMenu[nearbyGameCount + 1].Type =
+        MENUITEM_LASTITEM;
+}
+
+
+bool impl3dsLocalPlayHasGuest();
+bool impl3dsLocalPlayClientHasHost();
+
+bool impl3dsLocalPlayHostPollTransfer(
+    u32 *sentBytes,
+    u32 *totalBytes,
+    bool *ready,
+    bool *failed);
+
+bool impl3dsLocalPlayClientPollTransfer(
+    char *gameName,
+    size_t gameNameSize,
+    u32 *receivedBytes,
+    u32 *totalBytes,
+    bool *ready,
+    bool *failed);
+
+const char *impl3dsLocalPlayGetReceivedRomPath();
+
+bool impl3dsLocalPlayHostBeginStart();
+int impl3dsLocalPlayHostPollStart();
+void impl3dsLocalPlayHostSendGo();
+
+int impl3dsLocalPlayClientPollStart();
+void impl3dsLocalPlayClientMarkStartReady();
+
+int impl3dsLocalPlayScanHosts(
+    char hostNames[][32],
+    char gameNames[][96],
+    int maxHosts);
+
+bool impl3dsLocalPlayJoinScannedHost(int index);
+
+void impl3dsLocalPlayStop();
+
+static bool hostLobbyGuestConnected = false;
+
+static bool updateHostLobby()
+{
+    if (!hostLobbyActive)
+        return false;
+
+    bool redraw = false;
+    bool connected = impl3dsLocalPlayHasGuest();
+
+    u32 sentBytes = 0;
+    u32 totalBytes = 0;
+    bool ready = false;
+    bool failed = false;
+
+    if (impl3dsLocalPlayHostPollTransfer(
+            &sentBytes,
+            &totalBytes,
+            &ready,
+            &failed))
+    {
+        redraw = true;
+    }
+
+    if (connected != hostLobbyGuestConnected)
+    {
+        hostLobbyGuestConnected = connected;
+        redraw = true;
+    }
+
+    if (!connected)
+    {
+        snprintf(
+            hostLobbyPlayer2Text,
+            sizeof(hostLobbyPlayer2Text),
+            "Player 2: Waiting..."
+        );
+    }
+    else if (failed)
+    {
+        snprintf(
+            hostLobbyPlayer2Text,
+            sizeof(hostLobbyPlayer2Text),
+            "Player 2: Transfer failed"
+        );
+    }
+    else if (ready)
+    {
+        snprintf(
+            hostLobbyPlayer2Text,
+            sizeof(hostLobbyPlayer2Text),
+            "Player 2: Ready"
+        );
+    }
+    else
+    {
+        snprintf(
+            hostLobbyPlayer2Text,
+            sizeof(hostLobbyPlayer2Text),
+            "Player 2: Receiving %lu / %lu",
+            (unsigned long)sentBytes,
+            (unsigned long)totalBytes
+        );
+    }
+
+    hostLobbyMenu[3].Text =
+        hostLobbyPlayer2Text;
+
+    if (connected &&
+        ready &&
+        !hostStartRequested)
+    {
+        if (hostLobbyMenu[4].Type !=
+            MENUITEM_ACTION)
+        {
+            hostLobbyMenu[4].Type =
+                MENUITEM_ACTION;
+
+            hostLobbyMenu[4].ID = 6201;
+            hostLobbyMenu[4].Text =
+                "  Start Game";
+
+            menu3dsSetSelectedItemIndexByID(
+                0,
+                6201
+            );
+
+            redraw = true;
+        }
+    }
+    else if (!hostStartRequested)
+    {
+        if (hostLobbyMenu[4].Type !=
+            MENUITEM_DISABLED)
+        {
+            hostLobbyMenu[4].Type =
+                MENUITEM_DISABLED;
+
+            hostLobbyMenu[4].ID = -1;
+            hostLobbyMenu[4].Text =
+                "  Start Game";
+
+            redraw = true;
+        }
+    }
+
+    if (hostStartRequested)
+    {
+        int startEvent =
+            impl3dsLocalPlayHostPollStart();
+
+        if (startEvent == -1)
+        {
+            hostStartRequested = false;
+            hostCorePrepared = false;
+
+            hostLobbyMenu[4].Type =
+                MENUITEM_ACTION;
+
+            hostLobbyMenu[4].ID = 6201;
+            hostLobbyMenu[4].Text =
+                "  Retry Start";
+
+            menu3dsSetSelectedItemIndexByID(
+                0,
+                6201
+            );
+
+            redraw = true;
+        }
+
+        // Guest has now loaded the exact savestate that
+        // System A currently has.
+        if (startEvent == 1)
+        {
+            hostCorePrepared = true;
+
+            hostLobbyMenu[4].Text =
+                "  Starting...";
+
+            // Do NOT reload/reset A here.
+            // A's current core is the canonical state.
+            impl3dsLocalPlayHostSendGo();
+
+            redraw = true;
+        }
+
+        if (startEvent == 2 &&
+            hostCorePrepared)
+        {
+            emulator.emulatorState =
+                EMUSTATE_EMULATE;
+
+            localPlayLaunchPending = true;
+
+            menu3dsSetFrameCallback(NULL);
+            menu3dsRequestExit();
+
+            return true;
+        }
+    }
+
+    return redraw;
+}
+
+
+static bool updateJoinLobby()
+{
+    if (!joinLobbyActive ||
+        !joinLobbyHostConnected)
+    {
+        return false;
+    }
+
+    if (!impl3dsLocalPlayClientHasHost())
+    {
+        joinLobbyHostConnected = false;
+
+        joinLobbyMenu[1].Text =
+            "Disconnected from Host";
+
+        joinLobbyMenu[2].Text =
+            "Press B to return";
+
+        joinLobbyMenu[3].Text = "";
+
+        impl3dsLocalPlayStop();
+
+        return true;
+    }
+
+    bool redraw = false;
+
+    char transferGame[96] = {};
+    u32 receivedBytes = 0;
+    u32 totalBytes = 0;
+    bool ready = false;
+    bool failed = false;
+
+    if (impl3dsLocalPlayClientPollTransfer(
+            transferGame,
+            sizeof(transferGame),
+            &receivedBytes,
+            &totalBytes,
+            &ready,
+            &failed))
+    {
+        redraw = true;
+    }
+
+    if (transferGame[0])
+    {
+        snprintf(
+            joinLobbyGameText,
+            sizeof(joinLobbyGameText),
+            "Game: %s",
+            transferGame
+        );
+
+        joinLobbyMenu[2].Text =
+            joinLobbyGameText;
+    }
+
+    if (failed)
+    {
+        snprintf(
+            joinLobbyStatusText,
+            sizeof(joinLobbyStatusText),
+            "ROM transfer failed"
+        );
+    }
+    else if (ready && !joinCorePrepared)
+    {
+        snprintf(
+            joinLobbyStatusText,
+            sizeof(joinLobbyStatusText),
+            "Ready"
+        );
+    }
+    else if (!ready &&
+             totalBytes > 0)
+    {
+        snprintf(
+            joinLobbyStatusText,
+            sizeof(joinLobbyStatusText),
+            "Receiving: %lu / %lu bytes",
+            (unsigned long)receivedBytes,
+            (unsigned long)totalBytes
+        );
+    }
+
+    joinLobbyMenu[3].Text =
+        joinLobbyStatusText;
+
+    if (ready)
+    {
+        int startEvent =
+            impl3dsLocalPlayClientPollStart();
+
+        if (startEvent == -1)
+        {
+            snprintf(
+                joinLobbyStatusText,
+                sizeof(joinLobbyStatusText),
+                "State sync failed"
+            );
+
+            redraw = true;
+        }
+
+        // The transferred ROM and the host's canonical
+        // savestate have already been loaded inside
+        // impl3dsLocalPlayClientPollStart().
+        if (startEvent == 1)
+        {
+            const char *tempRomPath =
+                impl3dsLocalPlayGetReceivedRomPath();
+
+            if (tempRomPath)
+            {
+                strncpy(
+                    romFileNameFullPath,
+                    tempRomPath,
+                    _MAX_PATH - 1
+                );
+
+                romFileNameFullPath[
+                    _MAX_PATH - 1
+                ] = '\0';
+            }
+
+            joinCorePrepared = true;
+
+            snprintf(
+                joinLobbyStatusText,
+                sizeof(joinLobbyStatusText),
+                "Ready - synchronized..."
+            );
+
+            redraw = true;
+        }
+
+        if (startEvent == 2 &&
+            joinCorePrepared)
+        {
+            emulator.emulatorState =
+                EMUSTATE_EMULATE;
+
+            localPlayLaunchPending = true;
+
+            menu3dsSetFrameCallback(NULL);
+            menu3dsRequestExit();
+
+            return true;
+        }
+    }
+
+    return redraw;
+}
+
+static void updateLocalPlayMenu()
+{
+    localPlayMenu[0].Text =
+        localPlayMode == LOCALPLAY_SINGLE ? "[X] Single" : "[ ] Single";
+
+    localPlayMenu[1].Text =
+        localPlayMode == LOCALPLAY_HOST ? "[X] Host" : "[ ] Host";
+
+    localPlayMenu[2].Text =
+        localPlayMode == LOCALPLAY_JOIN ? "[X] Join" : "[ ] Join";
+}
+
 extern SMenuItem emulatorMenu[];
-
-
-//-------------------------------------------------------
-// Load the ROM and reset the CPU.
-//-------------------------------------------------------
-
 bool emulatorSettingsLoad(bool, bool, bool);
 bool emulatorSettingsSave(bool, bool, bool);
+
+bool impl3dsLocalPlayStartHost(
+    const char *gameName,
+    const char *romPath);
+bool impl3dsLocalPlayJoinFirstHost(
+    char *hostName,
+    size_t hostNameSize,
+    char *gameName,
+    size_t gameNameSize);
+bool impl3dsLocalPlayClientHasHost();
+bool impl3dsLocalPlayHasGuest();
+void impl3dsLocalPlayStop();
 
 bool emulatorLoadRom()
 {
@@ -106,25 +557,18 @@ bool emulatorLoadRom()
     char romFileNameFullPathOriginal[_MAX_PATH];
     strncpy(romFileNameFullPathOriginal, romFileNameFullPath, _MAX_PATH - 1);
 
-    //emulatorSettingsSave(true, true, false);
     snprintf(romFileNameFullPath, _MAX_PATH, "%s%s", file3dsGetCurrentDir(), romFileName);
 
     char romFileNameFullPath2[_MAX_PATH];
     strncpy(romFileNameFullPath2, romFileNameFullPath, _MAX_PATH - 1);
 
-    // Load up the new ROM settings first.
-    //
     emulatorSettingsLoad(false, true, false);
     impl3dsApplyAllSettings();
     
     if (!impl3dsLoadROM(romFileNameFullPath2))
     {
-        // If the ROM loading fails:
-        // 1. Restore the original ROM file path.
         strncpy(romFileNameFullPath, romFileNameFullPathOriginal, _MAX_PATH - 1);
-        
-        // 2. Reload original settings
-        //emulatorSettingsLoad(false, true, false);
+
         impl3dsApplyAllSettings();
         
         menu3dsHideDialog();
@@ -141,39 +585,23 @@ bool emulatorLoadRom()
     cheat3dsLoadCheatTextFile(file3dsReplaceFilenameExtension(romFileNameFullPath, ".chx"));
     menu3dsHideDialog();
 
-    // Fix: Game-specific settings that never get saved.
     impl3dsCopyMenuToOrFromSettings(false);
 
     return true;
 }
-
-
-//----------------------------------------------------------------------
-// Menus
-//----------------------------------------------------------------------
 #define MAX_FILES 1000
 SMenuItem fileMenu[MAX_FILES + 1];
-//char romFileNames[MAX_FILES][_MAX_PATH];
-// By changing the romFileNames to fileList (strings allocated on demand)
-// this fixes the crashing problem on Old 3DS when running Luma 8 and Rosalina 2.
-// 
 std::vector<std::string> fileList;
 
 int totalRomFileCount = 0;
-
-//----------------------------------------------------------------------
-// Load all ROM file names (up to 1000 ROMs)
-//----------------------------------------------------------------------
 void fileGetAllFiles(void)
 {
     fileList = file3dsGetFiles(impl3dsRomExtensions, MAX_FILES);
 
     totalRomFileCount = 0;
 
-    // Increase the total number of files we can display.
     for (int i = 0; i < fileList.size() && i < MAX_FILES; i++)
     {
-        //strncpy(romFileNames[i], fileList[i].c_str(), _MAX_PATH);
         totalRomFileCount++;
         fileMenu[i].Type = MENUITEM_ACTION;
         fileMenu[i].ID = i;
@@ -181,11 +609,6 @@ void fileGetAllFiles(void)
     }
     fileMenu[totalRomFileCount].Type = MENUITEM_LASTITEM;
 }
-
-
-//----------------------------------------------------------------------
-// Find the ID of the last selected file in the file list.
-//----------------------------------------------------------------------
 int fileFindLastSelectedFile()
 {
     for (int i = 0; i < totalRomFileCount && i < MAX_FILES; i++)
@@ -195,11 +618,6 @@ int fileFindLastSelectedFile()
     }
     return -1;
 }
-
-
-//----------------------------------------------------------------------
-// Load global settings, and game-specific settings.
-//----------------------------------------------------------------------
 bool emulatorSettingsLoad(bool includeGlobalSettings, bool includeGameSettings, bool showMessage = true)
 {
     if (includeGlobalSettings)
@@ -234,17 +652,11 @@ bool emulatorSettingsLoad(bool includeGlobalSettings, bool includeGameSettings, 
             input3dsSetDefaultButtonMappings(settings3DS.ButtonMapping, settings3DS.Turbo, true);
             impl3dsApplyAllSettings();
 
-            //return emulatorSettingsSave(true, showMessage);
             return true;
         }
     }
     return true;
 }
-
-
-//----------------------------------------------------------------------
-// Save global settings, and game-specific settings.
-//----------------------------------------------------------------------
 bool emulatorSettingsSave(bool includeGlobalSettings, bool includeGameSettings, bool showMessage)
 {
     if (showMessage)
@@ -271,12 +683,6 @@ bool emulatorSettingsSave(bool includeGlobalSettings, bool includeGameSettings, 
 
     return true;
 }
-
-
-
-//----------------------------------------------------------------------
-// Start up menu.
-//----------------------------------------------------------------------
 void menuSelectFile(void)
 {
     gfxSetDoubleBuffering(GFX_BOTTOM, true);
@@ -286,6 +692,7 @@ void menuSelectFile(void)
     menu3dsClearMenuTabs();
     menu3dsAddTab("Emulator", emulatorNewMenu);
     menu3dsAddTab("Select ROM", fileMenu);
+    menu3dsAddTab("Local Play", localPlayMenu);
     menu3dsSetTabSubTitle(0, NULL);
     menu3dsSetTabSubTitle(1, file3dsGetCurrentDir());
     menu3dsSetCurrentMenuTab(1);
@@ -303,11 +710,84 @@ void menuSelectFile(void)
         selection = menu3dsShowMenu(NULL, animateMenu);
         animateMenu = false;
 
+        if (selection == -2 && localPlayLaunchPending)
+        {
+            localPlayLaunchPending = false;
+
+            hostLobbyActive = false;
+            joinLobbyActive = false;
+            joinDiscoveryActive = false;
+
+            hostStartRequested = false;
+            hostCorePrepared = false;
+            joinCorePrepared = false;
+
+            menu3dsSetFrameCallback(NULL);
+
+            menu3dsHideMenu();
+            consoleInit(GFX_BOTTOM, NULL);
+            consoleClear();
+
+            return;
+        }
+
+        if (selection == -1 && hostLobbyActive)
+        {
+            impl3dsLocalPlayStop();
+            hostLobbyActive = false;
+            hostLobbyGuestConnected = false;
+            menu3dsSetFrameCallback(NULL);
+
+            menu3dsClearMenuTabs();
+            menu3dsAddTab("Emulator", emulatorNewMenu);
+            menu3dsAddTab("Select ROM", fileMenu);
+            menu3dsAddTab("Local Play", localPlayMenu);
+
+            menu3dsSetTabSubTitle(0, NULL);
+            menu3dsSetTabSubTitle(1, file3dsGetCurrentDir());
+            menu3dsSetCurrentMenuTab(1);
+
+            continue;
+        }
+
+        if (selection == -1 && joinDiscoveryActive)
+        {
+            impl3dsLocalPlayStop();
+            joinDiscoveryActive = false;
+
+            menu3dsClearMenuTabs();
+            menu3dsAddTab("Emulator", emulatorNewMenu);
+            menu3dsAddTab("Select ROM", fileMenu);
+            menu3dsAddTab("Local Play", localPlayMenu);
+
+            menu3dsSetTabSubTitle(0, NULL);
+            menu3dsSetTabSubTitle(1, file3dsGetCurrentDir());
+            menu3dsSetCurrentMenuTab(2);
+
+            continue;
+        }
+
+        if (selection == -1 && joinLobbyActive)
+        {
+            impl3dsLocalPlayStop();
+            joinLobbyActive = false;
+            joinLobbyHostConnected = false;
+            menu3dsSetFrameCallback(NULL);
+
+            menu3dsClearMenuTabs();
+            menu3dsAddTab("Emulator", emulatorNewMenu);
+            menu3dsAddTab("Select ROM", fileMenu);
+            menu3dsAddTab("Local Play", localPlayMenu);
+
+            menu3dsSetTabSubTitle(0, NULL);
+            menu3dsSetTabSubTitle(1, file3dsGetCurrentDir());
+            menu3dsSetCurrentMenuTab(2);
+
+            continue;
+        }
+
         if (selection >= 0 && selection < 1000)
         {
-            // Load ROM
-            //
-            //romFileName = romFileNames[selection];
             romFileName = fileList[selection].c_str();
             strncpy(romFileNameLastSelected, romFileName, _MAX_PATH);
             if (romFileName[0] == 1)
@@ -321,16 +801,76 @@ void menuSelectFile(void)
                 menu3dsClearMenuTabs();
                 menu3dsAddTab("Emulator", emulatorNewMenu);
                 menu3dsAddTab("Select ROM", fileMenu);
+                menu3dsAddTab("Local Play", localPlayMenu);
                 menu3dsSetCurrentMenuTab(1);
                 menu3dsSetTabSubTitle(1, file3dsGetCurrentDir());
                 selection = -1;
             }
             else
             {
+                int previousEmulatorState = emulator.emulatorState;
+
                 if (!emulatorLoadRom())
                 {
                     menu3dsShowDialog("Load ROM", "Hmm... unable to load ROM.", DIALOGCOLOR_RED, optionsForOk);
                     menu3dsHideDialog();
+                }
+                else if (localPlayMode == LOCALPLAY_HOST)
+                {
+                    emulator.emulatorState = previousEmulatorState;
+
+                    if (!impl3dsLocalPlayStartHost(
+                            romFileName,
+                            romFileNameFullPath))
+                    {
+                        menu3dsShowDialog(
+                            "Local Play",
+                            "Unable to create local wireless lobby.",
+                            DIALOGCOLOR_RED,
+                            optionsForOk
+                        );
+                        menu3dsHideDialog();
+                        selection = -1;
+                    }
+                    else
+                    {
+                        snprintf(
+                            hostLobbyGameText,
+                            sizeof(hostLobbyGameText),
+                            "Game: %s",
+                            romFileName
+                        );
+
+                        hostLobbyActive = true;
+                        hostLobbyGuestConnected = false;
+
+                        hostStartRequested = false;
+                        hostCorePrepared = false;
+                        localPlayLaunchPending = false;
+
+                        hostLobbyMenu[4].Type =
+                            MENUITEM_DISABLED;
+                        hostLobbyMenu[4].ID = -1;
+                        hostLobbyMenu[4].Text =
+                            "  Start Game";
+
+                        snprintf(
+                            hostLobbyPlayer2Text,
+                            sizeof(hostLobbyPlayer2Text),
+                            "Player 2: Waiting..."
+                        );
+
+                        hostLobbyMenu[3].Text =
+                            hostLobbyPlayer2Text;
+
+                        menu3dsSetFrameCallback(updateHostLobby);
+
+                        menu3dsClearMenuTabs();
+                        menu3dsAddTab("Host Lobby", hostLobbyMenu);
+                        menu3dsSetCurrentMenuTab(0);
+
+                        selection = -1;
+                    }
                 }
                 else
                 {
@@ -339,6 +879,154 @@ void menuSelectFile(void)
                     consoleClear();
                     return;
                 }
+            }
+        }
+        else if (selection == 6201)
+        {
+            if (impl3dsLocalPlayHostBeginStart())
+            {
+                hostStartRequested = true;
+                hostCorePrepared = false;
+
+                hostLobbyMenu[4].Type =
+                    MENUITEM_DISABLED;
+
+                hostLobbyMenu[4].ID = -1;
+                hostLobbyMenu[4].Text =
+                    "  Starting...";
+            }
+
+            selection = -1;
+        }
+
+        else if (
+            selection >= 6300 &&
+            selection < 6300 + nearbyGameCount)
+        {
+            int lobbyIndex = selection - 6300;
+
+            menu3dsShowDialog(
+                "Local Play",
+                "Connecting...",
+                DIALOGCOLOR_CYAN,
+                NULL
+            );
+
+            bool joined =
+                impl3dsLocalPlayJoinScannedHost(lobbyIndex);
+
+            menu3dsHideDialog();
+
+            if (!joined)
+            {
+                menu3dsShowDialog(
+                    "Local Play",
+                    "Unable to join this game.",
+                    DIALOGCOLOR_RED,
+                    optionsForOk
+                );
+
+                menu3dsHideDialog();
+                selection = -1;
+            }
+            else
+            {
+                joinDiscoveryActive = false;
+                joinLobbyActive = true;
+                joinLobbyHostConnected = true;
+
+                joinCorePrepared = false;
+                localPlayLaunchPending = false;
+
+                snprintf(
+                    joinLobbyHostText,
+                    sizeof(joinLobbyHostText),
+                    "Joined: %s",
+                    nearbyHostNames[lobbyIndex]
+                );
+
+                snprintf(
+                    joinLobbyGameText,
+                    sizeof(joinLobbyGameText),
+                    "Game: %s",
+                    nearbyGameNames[lobbyIndex]
+                );
+
+                snprintf(
+                    joinLobbyStatusText,
+                    sizeof(joinLobbyStatusText),
+                    "Waiting for ROM info..."
+                );
+
+                joinLobbyMenu[1].Text = joinLobbyHostText;
+                joinLobbyMenu[2].Text = joinLobbyGameText;
+                joinLobbyMenu[3].Text = joinLobbyStatusText;
+
+                menu3dsSetFrameCallback(updateJoinLobby);
+
+                menu3dsClearMenuTabs();
+                menu3dsAddTab("Join Lobby", joinLobbyMenu);
+                menu3dsSetCurrentMenuTab(0);
+
+                selection = -1;
+            }
+        }
+
+        else if (selection == 6101)
+        {
+            localPlayMode = LOCALPLAY_SINGLE;
+            updateLocalPlayMenu();
+        }
+        else if (selection == 6102)
+        {
+            localPlayMode = LOCALPLAY_HOST;
+            updateLocalPlayMenu();
+
+            menu3dsSetCurrentMenuTab(1);
+        }
+        else if (selection == 6103)
+        {
+            localPlayMode = LOCALPLAY_JOIN;
+            updateLocalPlayMenu();
+
+            menu3dsShowDialog(
+                "Local Play",
+                "Searching for nearby games...",
+                DIALOGCOLOR_CYAN,
+                NULL
+            );
+
+            nearbyGameCount = impl3dsLocalPlayScanHosts(
+                nearbyHostNames,
+                nearbyGameNames,
+                LOCALPLAY_MAX_LOBBIES
+            );
+
+            menu3dsHideDialog();
+
+            if (nearbyGameCount <= 0)
+            {
+                menu3dsShowDialog(
+                    "Local Play",
+                    "No nearby games found.",
+                    DIALOGCOLOR_RED,
+                    optionsForOk
+                );
+
+                menu3dsHideDialog();
+            }
+            else
+            {
+                buildNearbyGamesMenu();
+
+                joinDiscoveryActive = true;
+                menu3dsSetFrameCallback(NULL);
+
+                menu3dsClearMenuTabs();
+                menu3dsAddTab("Join", nearbyGamesMenu);
+                menu3dsSetCurrentMenuTab(0);
+
+                selection = -1;
             }
         }
         else if (selection == 6001)
@@ -353,7 +1041,7 @@ void menuSelectFile(void)
             }
         }
 
-        selection = -1;     // Bug fix: Fixes crashing when setting options before any ROMs are loaded.
+        selection = -1;
     }
     while (selection == -1);
 
@@ -361,10 +1049,6 @@ void menuSelectFile(void)
 
 }
 
-
-//----------------------------------------------------------------------
-// Checks if file exists.
-//----------------------------------------------------------------------
 bool IsFileExists(const char * filename) {
     if (FILE * file = fopen(filename, "r")) {
         fclose(file);
@@ -372,16 +1056,10 @@ bool IsFileExists(const char * filename) {
     }
     return false;
 }
-
-
-//----------------------------------------------------------------------
-// Menu when the emulator is paused in-game.
-//----------------------------------------------------------------------
 bool menuSelectedChanged(int ID, int value)
 {
     if (ID >= 50000 && ID <= 51000)
     {
-        // Handle cheats
         int enabled = value;
         impl3dsSetCheatEnabledFlag(ID - 50000, enabled == 1);
         cheat3dsSetCheatEnabledFlag(ID - 50000, enabled == 1);
@@ -390,11 +1068,6 @@ bool menuSelectedChanged(int ID, int value)
 
     return impl3dsOnMenuSelectedChanged(ID, value);
 }
-
-
-//----------------------------------------------------------------------
-// Menu when the emulator is paused in-game.
-//----------------------------------------------------------------------
 void menuPause()
 {
     gfxSetDoubleBuffering(GFX_BOTTOM, true);
@@ -439,17 +1112,12 @@ void menuPause()
 
         if (selection == -1 || selection == 1000)
         {
-            // Cancels the menu and resumes game
-            //
             returnToEmulation = true;
 
             break;
         }
         else if (selection < 1000)
         {
-            // Load ROM
-            //
-            //romFileName = romFileNames[selection];
             romFileName = fileList[selection].c_str();
             if (romFileName[0] == 1)
             {
@@ -488,9 +1156,6 @@ void menuPause()
 
                 if (loadRom)
                 {
-                    // Save settings and cheats, before loading
-                    // your new ROM.
-                    //
                     if (impl3dsCopyMenuToOrFromSettings(true))
                     {
                         emulatorSettingsSave(true, true, false);
@@ -562,9 +1227,6 @@ void menuPause()
             char ext[256];
             const char *path = NULL;
 
-            // Loop through and look for an non-existing
-            // file name.
-            //
             int i = 1;
             while (i <= 999)
             {
@@ -638,8 +1300,6 @@ void menuPause()
 
     menu3dsHideMenu();
 
-    // Save settings and cheats
-    //
     if (!settingsSaved && impl3dsCopyMenuToOrFromSettings(true))
     {
         emulatorSettingsSave(true, true, true);
@@ -654,16 +1314,8 @@ void menuPause()
         consoleClear();
     }
 
-    // Loads the new ROM if a ROM was selected.
-    //
-    //if (loadRomBeforeExit)
-    //    emulatorLoadRom();
-
 }
 
-//-------------------------------------------------------
-// Sets up all the cheats to be displayed in the menu.
-//-------------------------------------------------------
 SMenuItem cheatMenu[401] =
 {
     MENU_MAKE_HEADER2   ("Cheats"),
@@ -687,13 +1339,6 @@ char *noCheatsText[] {
     "    Refer to readme.md for the .CHX file format. ",
     ""
      };
-
-
-//--------------------------------------------------------
-// Initialize the emulator engine and everything else.
-// This calls the impl3dsInitializeCore, which executes
-// initialization code specific to the emulation core.
-//--------------------------------------------------------
 void emulatorInitialize()
 {
     emulator.enableDebug = false;
@@ -734,21 +1379,16 @@ void emulatorInitialize()
     */
     printf ("Initialization complete\n");
 
-    osSetSpeedupEnable(1);    // Performance: use the higher clock speed for new 3DS.
+    osSetSpeedupEnable(1);
 
     enableExitHook();
 
     emulatorSettingsLoad(true, false, true);
 
-    // Do this one more time.
     if (file3dsGetCurrentDir()[0] == 0)
         file3dsInitialize();
 }
 
-
-//--------------------------------------------------------
-// Finalize the emulator.
-//--------------------------------------------------------
 void emulatorFinalize()
 {
     consoleClear();
@@ -777,9 +1417,6 @@ void emulatorFinalize()
 #endif
     ptmSysmExit ();
 
-    //printf("romfsExit:\n");
-    //romfsExit();
-    
 #ifndef EMU_RELEASE
     printf("hidExit:\n");
 #endif
@@ -799,12 +1436,6 @@ void emulatorFinalize()
 
 
 bool firstFrame = true;
-
-
-//---------------------------------------------------------
-// Counts the number of frames per second, and prints
-// it to the bottom screen every 60 frames.
-//---------------------------------------------------------
 char frameCountBuffer[70];
 void updateFrameCount()
 {
@@ -851,20 +1482,8 @@ void updateFrameCount()
     frameCount60--;
 }
 
-
-
-
-
-//----------------------------------------------------------
-// This is the main emulation loop. It calls the 
-//    impl3dsRunOneFrame
-//   (which must be implemented for any new core)
-// for the execution of the frame.
-//----------------------------------------------------------
 void emulatorLoop()
 {
-	// Main loop
-    //emulator.enableDebug = true;
     emulator.waitBehavior = WAIT_FULL;
 
     int emuFramesSkipped = 0;
@@ -883,7 +1502,6 @@ void emulatorLoop()
 
     bool skipDrawingFrame = false;
 
-    // Reinitialize the console.
     consoleInit(GFX_BOTTOM, NULL);
     gfxSetDoubleBuffering(GFX_BOTTOM, false);
     menu3dsDrawBlackScreen();
@@ -892,12 +1510,17 @@ void emulatorLoop()
         ui3dsDrawStringWithNoWrapping(0, 100, 320, 115, 0x7f7f7f, HALIGN_CENTER, "Touch screen for menu");
     }
 
+
     snd3dsStartPlaying();
+
 
     impl3dsEmulationBegin();
 
+
 	while (true)
 	{
+
+
         startFrameTick = svcGetSystemTick();
         aptMainLoop();
 
@@ -905,8 +1528,11 @@ void emulatorLoop()
             break;
 
         gpu3dsStartNewFrame();
+        
+
         gpu3dsCheckSlider();
         updateFrameCount();
+
 
     	input3dsScanInputForEmulation();
         if (emulator.emulatorState != EMUSTATE_EMULATE)
@@ -916,16 +1542,10 @@ void emulatorLoop()
 
         firstFrame = false; 
 
-        // This either waits for the next frame, or decides to skip
-        // the rendering for the next frame if we are too slow.
-        //
 #ifndef EMU_RELEASE
         if (emulator.isReal3DS)
 #endif
         {
-
-            // Check the keys to see if the user is fast-forwarding
-            //
             int keysHeld = input3dsGetCurrentKeysHeld();
             emulator.fastForwarding = false;
             if ((settings3DS.UseGlobalEmuControlKeys && (settings3DS.GlobalButtonHotkeyDisableFramelimit & keysHeld)) ||
@@ -938,8 +1558,8 @@ void emulatorLoop()
             if (emulator.fastForwarding)
                 ticksPerFrame = TICKS_PER_FRAME_FASTFORWARD;
 
-            emuFrameTotalActualTicks += actualTicksThisFrame;  // actual time spent rendering past x frames.
-            emuFrameTotalAccurateTicks += ticksPerFrame;  // time supposed to be spent rendering past x frames.
+            emuFrameTotalActualTicks += actualTicksThisFrame;
+            emuFrameTotalAccurateTicks += ticksPerFrame;
 
             int isSlow = 0;
 
@@ -947,15 +1567,12 @@ void emulatorLoop()
 
             if (skew < 0)
             {
-                // We've skewed out of the actual frame rate.
-                // Once we skew beyond 0.1 (10%) frames slower, skip the frame.
-                //
                 if (skew < -ticksPerFrame/10 && emuFramesSkipped < settings3DS.MaxFrameSkips)
                 {
                     skipDrawingFrame = true;
                     emuFramesSkipped++;
 
-                    framesSkippedCount++;   // this is used for the stats display every 60 frames.
+                    framesSkippedCount++;
                 }
                 else
                 {
@@ -975,12 +1592,10 @@ void emulatorLoop()
                 float timeDiffInMilliseconds = (float)skew * 1000000 / TICKS_PER_SEC;
                 if (emulator.waitBehavior == WAIT_HALF)
                     timeDiffInMilliseconds /= 2;
-                else if (emulator.waitBehavior == WAIT_NONE)
+                else if (emulator.waitBehavior == EMU_WAIT_NONE)
                     timeDiffInMilliseconds = 1;
                 emulator.waitBehavior = WAIT_FULL;
 
-                // Reset the counters.
-                //
                 emuFrameTotalActualTicks = 0;
                 emuFrameTotalAccurateTicks = 0;
                 emuFramesSkipped = 0;
@@ -995,19 +1610,9 @@ void emulatorLoop()
 
     snd3dsStopPlaying();
 
-    // Wait for the sound thread to leave the snd3dsMixSamples entirely
-    // to prevent a race condition between the PTMU_GetBatteryChargeState (when
-    // drawing the menu) and GSPGPU_FlushDataCache (in the sound thread).
-    //
-    // (There's probably a better way to do this, but this will do for now)
-    //
     svcSleepThread(500000);
 }
 
-
-//---------------------------------------------------------
-// Main entrypoint.
-//---------------------------------------------------------
 int main()
 {
     emulatorInitialize();
