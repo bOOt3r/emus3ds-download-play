@@ -12,7 +12,7 @@ And as a sign, clear as day i got this headline in my feed a few days later: [Th
 Unfortunatly i don't own a NES, but i do own a (moderate) BUNCH of old 2DS and 3DS systems and on one of them i had VirtuaNES installed so.. Here we are!
 
 Full transprancy, i would not have a chance in hell to make this happen without the help of an LLM, just so you know!
-With that said, feel free to improve and point out mistakes!
+With that said, feel free to improve, point out mistakes or [buy me a hotdog!](https://buymeacoffee.com/b00t3r)
 
 ## Local Play — current status
 
